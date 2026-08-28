@@ -9,6 +9,7 @@ pub mod capped_most_recent_of;
 pub mod chainlink;
 pub mod conditional;
 pub mod discount_to_maturity;
+pub mod exponent_tranching;
 pub mod fixed_price;
 pub mod flashtrade_lp;
 pub mod jito_restaking;
@@ -114,6 +115,7 @@ impl OracleType {
             OracleType::TotalMintSupply => 15_000,
             OracleType::Conditional => 20_000,
             OracleType::KlendCTokenExchangeRate => 200_000,
+            OracleType::ExponentTranching => 250_000,
         }
     }
 }
@@ -312,6 +314,13 @@ where
             klend_ctoken_exchange_rate::get_price(base_account, clock, extra_accounts)
                 .map_err(Into::into)
         }
+        OracleType::ExponentTranching => exponent_tranching::get_price(
+            base_account,
+            &oracle_mappings.generic[index],
+            clock,
+            extra_accounts,
+        )
+        .map_err(Into::into),
     }?;
     // The price providers above are performing their type-specific validations, but are still free to return 0,
     // which we can only tolerate for certain oracle types (e.g. explicit fixed price, multiplication chains
@@ -432,6 +441,10 @@ pub fn validate_oracle_cfg(
         OracleType::KlendCTokenExchangeRate => {
             klend_ctoken_exchange_rate::validate_account(price_account).map_err(Into::into)
         }
+        OracleType::ExponentTranching => {
+            exponent_tranching::validate_mapping_cfg(price_account, generic_data)
+                .map_err(Into::into)
+        }
     }
 }
 
@@ -467,6 +480,8 @@ pub fn update_generic_data_must_reset_price(price_type: OracleType) -> bool {
         | OracleType::StakedSolBalance
         | OracleType::TotalMintSupply
         | OracleType::KlendCTokenExchangeRate => false,
+
+        OracleType::ExponentTranching => true,
 
         OracleType::FixedPrice
         | OracleType::DiscountToMaturity
@@ -536,6 +551,13 @@ pub fn debug_format_generic_data(
         | OracleType::DeprecatedPlaceholder5
         | OracleType::DeprecatedPlaceholder6
         | OracleType::DeprecatedPlaceholder7 => (), // no generic data to print
+
+        OracleType::ExponentTranching => {
+            d.field(
+                "exponent_tranching_cfg",
+                &exponent_tranching::ExponentTranchingData::from_generic_data(generic_data).ok(),
+            );
+        }
 
         OracleType::Chainlink => {
             d.field(

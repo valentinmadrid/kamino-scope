@@ -2258,6 +2258,7 @@ dependencies = [
  "solana-clock",
  "solana-compute-budget-interface",
  "solana-instruction",
+ "solana-instruction-error",
  "solana-instructions-sysvar 4.0.0",
  "solana-keypair",
  "solana-loader-v3-interface 8.0.1",
@@ -2267,6 +2268,7 @@ dependencies = [
  "solana-signer",
  "solana-system-interface",
  "solana-transaction",
+ "solana-transaction-error",
  "time",
 ]
 

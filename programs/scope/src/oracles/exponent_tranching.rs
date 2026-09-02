@@ -1,20 +1,16 @@
 use std::convert::TryInto;
 
-use anchor_lang::prelude::*;
+use anchor_lang::{prelude::*, InstructionData, ToAccountMetas};
 use decimal_wad::{common::uint::U192, decimal::Decimal};
+use exponent_tranching_itf::{
+    ExponentNumber, ExponentTranchingMarket, UpdateMarketReturnData, EXPONENT_NUMBER_SCALE_TO_WAD,
+};
 use solana_program::{
     instruction::{AccountMeta, Instruction},
     program::{get_return_data, invoke},
-    pubkey,
 };
 
-use crate::{DatedPrice, Price, ScopeError, ScopeResult};
-
-const EXPONENT_TRANCHING_PROGRAM_ID: Pubkey =
-    pubkey!("XPTrnchoawiUc9iYJrpfchS8vgr8Y5X2QGBdHPXukty");
-const UPDATE_MARKET_DISCRIMINATOR: [u8; 8] = [153, 39, 2, 197, 179, 50, 199, 217];
-const MARKET_DISCRIMINATOR: [u8; 8] = [119, 38, 120, 122, 60, 24, 58, 160];
-const EXPONENT_NUMBER_SCALE_TO_WAD: u64 = 1_000_000;
+use crate::{utils::account_deserialize, DatedPrice, Price, ScopeError, ScopeResult};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, AnchorDeserialize, AnchorSerialize)]
 pub enum ExponentTrancheSide {
@@ -44,41 +40,6 @@ impl ExponentTranchingData {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, AnchorDeserialize, AnchorSerialize)]
-struct ExponentNumber([u64; 4]);
-
-impl ExponentNumber {
-    fn raw_u128(self) -> ScopeResult<u128> {
-        let [low, high, upper_low, upper_high] = self.0;
-        if upper_low != 0 || upper_high != 0 {
-            return Err(ScopeError::MathOverflow);
-        }
-        Ok(u128::from(low) | (u128::from(high) << 64))
-    }
-
-    fn is_zero(self) -> bool {
-        self.0 == [0; 4]
-    }
-}
-
-#[derive(AnchorDeserialize, AnchorSerialize)]
-struct UpdateMarketReturnData {
-    market: Pubkey,
-    _sy_exchange_rate: ExponentNumber,
-    _senior_raw_nav: ExponentNumber,
-    _junior_raw_nav: ExponentNumber,
-    senior_effective_nav: ExponentNumber,
-    junior_effective_nav: ExponentNumber,
-    _senior_loss: ExponentNumber,
-    _junior_loss: ExponentNumber,
-    _senior_premium: ExponentNumber,
-    _junior_premium: ExponentNumber,
-    _utilization: ExponentNumber,
-    senior_lp_price_net_asset: ExponentNumber,
-    junior_lp_price_net_asset: ExponentNumber,
-    timestamp: i64,
-}
-
 pub fn get_price<'a, 'b>(
     market: &AccountInfo<'a>,
     generic_data: &[u8],
@@ -89,24 +50,29 @@ where
     'a: 'b,
 {
     let config = ExponentTranchingData::from_generic_data(generic_data)?;
-    let accounts = extra_accounts.collect::<Vec<_>>();
+    let market_state = account_deserialize::<ExponentTranchingMarket>(market)?;
+    let accounts = extra_accounts
+        .take(5 + market_state.sy_cpi_accounts.get_sy_state.len())
+        .collect::<Vec<_>>();
     let [return_model, address_lookup_table, sy_program, event_authority, program, sy_accounts @ ..] =
         accounts.as_slice()
     else {
         return Err(ScopeError::AccountsAndTokenMismatch);
     };
 
-    if program.key() != EXPONENT_TRANCHING_PROGRAM_ID {
+    if program.key() != exponent_tranching_itf::ID {
         return Err(ScopeError::UnexpectedAccount);
     }
 
-    let mut metas = Vec::with_capacity(accounts.len() + 1);
-    metas.push(AccountMeta::new(market.key(), false));
-    metas.push(AccountMeta::new(return_model.key(), false));
-    metas.push(AccountMeta::new_readonly(address_lookup_table.key(), false));
-    metas.push(AccountMeta::new_readonly(sy_program.key(), false));
-    metas.push(AccountMeta::new_readonly(event_authority.key(), false));
-    metas.push(AccountMeta::new_readonly(program.key(), false));
+    let mut metas = exponent_tranching_itf::accounts::UpdateMarket {
+        market: market.key(),
+        return_model_storage: return_model.key(),
+        address_lookup_table: address_lookup_table.key(),
+        sy_program: sy_program.key(),
+        event_authority: event_authority.key(),
+        program: program.key(),
+    }
+    .to_account_metas(None);
     metas.extend(sy_accounts.iter().map(|account| AccountMeta {
         pubkey: account.key(),
         is_signer: account.is_signer,
@@ -120,9 +86,9 @@ where
 
     invoke(
         &Instruction {
-            program_id: EXPONENT_TRANCHING_PROGRAM_ID,
+            program_id: exponent_tranching_itf::ID,
             accounts: metas,
-            data: UPDATE_MARKET_DISCRIMINATOR.to_vec(),
+            data: exponent_tranching_itf::instruction::UpdateMarket {}.data(),
         },
         &account_infos,
     )
@@ -130,7 +96,7 @@ where
 
     let (return_program, return_bytes) =
         get_return_data().ok_or(ScopeError::UnableToDeserializeAccount)?;
-    if return_program != EXPONENT_TRANCHING_PROGRAM_ID {
+    if return_program != exponent_tranching_itf::ID {
         return Err(ScopeError::UnexpectedAccount);
     }
 
@@ -168,7 +134,7 @@ fn to_scope_price(effective_nav: ExponentNumber, lp_price: ExponentNumber) -> Sc
     if effective_nav.is_zero() {
         return Ok(Price::default());
     }
-    let scaled_price = U192::from(lp_price.raw_u128()?)
+    let scaled_price = U192::from(lp_price.raw_u128().ok_or(ScopeError::MathOverflow)?)
         .checked_mul(U192::from(EXPONENT_NUMBER_SCALE_TO_WAD))
         .ok_or(ScopeError::MathOverflow)?;
     Decimal::from_scaled_val(scaled_price).try_into()
@@ -176,21 +142,11 @@ fn to_scope_price(effective_nav: ExponentNumber, lp_price: ExponentNumber) -> Sc
 
 pub fn validate_mapping_cfg(mapping: Option<&AccountInfo>, generic_data: &[u8]) -> ScopeResult<()> {
     let market = mapping.ok_or(ScopeError::MissingPriceAccount)?;
-    if market.owner != &EXPONENT_TRANCHING_PROGRAM_ID {
+    if market.owner != &exponent_tranching_itf::ID {
         return Err(ScopeError::WrongAccountOwner);
     }
-    let market_data = market
-        .try_borrow_data()
-        .map_err(|_| ScopeError::UnableToDeserializeAccount)?;
-    validate_market_discriminator(&market_data)?;
+    account_deserialize::<ExponentTranchingMarket>(market)?;
     ExponentTranchingData::from_generic_data(generic_data)?;
-    Ok(())
-}
-
-fn validate_market_discriminator(data: &[u8]) -> ScopeResult<()> {
-    if data.get(..MARKET_DISCRIMINATOR.len()) != Some(&MARKET_DISCRIMINATOR) {
-        return Err(ScopeError::InvalidAccountDiscriminator);
-    }
     Ok(())
 }
 
@@ -221,21 +177,15 @@ mod tests {
 
     #[test]
     fn exponent_number_rejects_values_above_u128() {
-        assert_eq!(
-            ExponentNumber([0, 0, 1, 0]).raw_u128().unwrap_err(),
-            ScopeError::MathOverflow
-        );
-        assert_eq!(
-            ExponentNumber([0, 0, 0, 1]).raw_u128().unwrap_err(),
-            ScopeError::MathOverflow
-        );
+        assert_eq!(ExponentNumber([0, 0, 1, 0]).raw_u128(), None);
+        assert_eq!(ExponentNumber([0, 0, 0, 1]).raw_u128(), None);
     }
 
     #[test]
     fn exponent_number_combines_little_endian_limbs() {
         assert_eq!(
-            ExponentNumber([u64::MAX, 7, 0, 0]).raw_u128().unwrap(),
-            u128::from(u64::MAX) | (u128::from(7u64) << 64)
+            ExponentNumber([u64::MAX, 7, 0, 0]).raw_u128(),
+            Some(u128::from(u64::MAX) | (u128::from(7u64) << 64))
         );
     }
 
@@ -266,19 +216,6 @@ mod tests {
             )
             .unwrap_err(),
             ScopeError::MathOverflow
-        );
-    }
-
-    #[test]
-    fn validates_market_discriminator() {
-        assert!(validate_market_discriminator(&MARKET_DISCRIMINATOR).is_ok());
-        assert_eq!(
-            validate_market_discriminator(&[0; 8]).unwrap_err(),
-            ScopeError::InvalidAccountDiscriminator
-        );
-        assert_eq!(
-            validate_market_discriminator(&MARKET_DISCRIMINATOR[..7]).unwrap_err(),
-            ScopeError::InvalidAccountDiscriminator
         );
     }
 }

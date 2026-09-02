@@ -1,5 +1,7 @@
 mod support;
 
+use solana_instruction_error::InstructionError;
+use solana_transaction_error::TransactionError;
 use support::{MainnetFixture, Scenario, TrancheSide, AUTO_MARKET, ONYC_MARKET};
 
 const MAX_PRICE_ERROR: f64 = 1e-9;
@@ -74,20 +76,35 @@ fn extra_accounts_cannot_replace_the_market_bound_interface() {
 }
 
 #[test]
+#[allow(deprecated)]
 fn rejects_incomplete_or_substituted_interface_accounts() {
-    for scenario in [
-        Scenario::MissingInterfaceAccount,
-        Scenario::WrongSyMeta,
-        Scenario::WrongReturnModel,
-        Scenario::WrongEventAuthority,
-        Scenario::WrongProgram,
-        Scenario::ReadonlyMarket,
+    for (scenario, instruction_error) in [
+        (
+            Scenario::MissingInterfaceAccount,
+            InstructionError::NotEnoughAccountKeys,
+        ),
+        (
+            Scenario::WrongSyMeta,
+            InstructionError::NotEnoughAccountKeys,
+        ),
+        (Scenario::WrongReturnModel, InstructionError::Custom(2001)),
+        (
+            Scenario::WrongEventAuthority,
+            InstructionError::Custom(2006),
+        ),
+        (Scenario::WrongProgram, InstructionError::Custom(6004)),
+        (
+            Scenario::ReadonlyMarket,
+            InstructionError::PrivilegeEscalation,
+        ),
     ] {
-        assert!(
-            MainnetFixture::load()
-                .run(TrancheSide::Senior, scenario)
-                .is_err(),
-            "{scenario:?} unexpectedly succeeded"
+        let error = MainnetFixture::load()
+            .run(TrancheSide::Senior, scenario)
+            .unwrap_err();
+        assert_eq!(
+            error.err,
+            TransactionError::InstructionError(1, instruction_error),
+            "unexpected error for {scenario:?}"
         );
     }
 }
@@ -98,11 +115,13 @@ fn scope_refresh_remains_the_first_non_compute_instruction() {
         Scenario::LegacyPreInstruction,
         Scenario::UnexpectedPreInstruction,
     ] {
-        assert!(
-            MainnetFixture::load()
-                .run(TrancheSide::Senior, scenario)
-                .is_err(),
-            "{scenario:?} unexpectedly succeeded"
+        let error = MainnetFixture::load()
+            .run(TrancheSide::Senior, scenario)
+            .unwrap_err();
+        assert_eq!(
+            error.err,
+            TransactionError::InstructionError(2, InstructionError::Custom(6014)),
+            "unexpected error for {scenario:?}"
         );
     }
 }

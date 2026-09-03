@@ -237,6 +237,9 @@ pub enum ScopeError {
         "Klend reserve version does not match the expected program version (deprecated reserve)"
     )]
     KlendReserveDeprecated,
+
+    #[msg("Exponent tranching CPI response failed validation")]
+    ExponentTranchingCPIError,
 }
 
 impl<T> From<TryFromPrimitiveError<T>> for ScopeError

@@ -37,6 +37,7 @@ serde = ["dep:serde"]
 anchor-lang = "0.28.0"
 anchor-spl = "0.28.0"
 solana-program = ">1.16.18"
+solana-address-lookup-table-program = "=1.16.27"
 bytemuck = { version = "1.4.0", features = ["min_const_generics", "derive"] }
 num_enum = "0.7.0"
 cfg-if = "1.0.0"
@@ -80,4 +81,4 @@ num-bigint = "0.4"
 securitize-itf = { path = "../securitize-itf", features = ["no-entrypoint"] }
 flashtrade-perp-itf = { path = "../flashtrade-perp-itf", features = ["no-entrypoint"] }
 klend-itf = { path = "../klend-itf", features = ["no-entrypoint"] }
-
+exponent-tranching-itf = { path = "../exponent-tranching-itf", features = ["no-entrypoint"] }

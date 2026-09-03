@@ -37,6 +37,7 @@ serde = ["dep:serde"]
 anchor-lang = "0.28.0"
 anchor-spl = "0.28.0"
 solana-program = ">1.16.18"
+solana-address-lookup-table-program = "=1.16.27"
 bytemuck = { version = "1.4.0", features = ["min_const_generics", "derive"] }
 num_enum = "0.7.0"
 cfg-if = "1.0.0"

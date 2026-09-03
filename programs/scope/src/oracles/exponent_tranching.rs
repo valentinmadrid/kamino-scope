@@ -3,14 +3,16 @@ use std::convert::TryInto;
 use anchor_lang::{prelude::*, InstructionData, ToAccountMetas};
 use decimal_wad::{common::uint::U192, decimal::Decimal};
 use exponent_tranching_itf::{
-    ExponentNumber, ExponentTranchingMarket, UpdateMarketReturnData, EXPONENT_NUMBER_SCALE_TO_WAD,
+    ExponentNumber, ExponentTranchingMarket, MarketCpiConfig, UpdateMarketReturnData,
+    EXPONENT_NUMBER_SCALE_TO_WAD,
 };
+use solana_address_lookup_table_program::state::AddressLookupTable;
 use solana_program::{
     instruction::{AccountMeta, Instruction},
     program::{get_return_data, invoke},
 };
 
-use crate::{utils::account_deserialize, DatedPrice, Price, ScopeError, ScopeResult};
+use crate::{DatedPrice, Price, ScopeError, ScopeResult};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, AnchorDeserialize, AnchorSerialize)]
 pub enum ExponentTrancheSide {
@@ -41,7 +43,7 @@ impl ExponentTranchingData {
 }
 
 pub fn get_price<'a, 'b>(
-    market: &AccountInfo<'a>,
+    market_account: &AccountInfo<'a>,
     generic_data: &[u8],
     clock: &Clock,
     extra_accounts: &mut impl Iterator<Item = &'b AccountInfo<'a>>,
@@ -50,9 +52,9 @@ where
     'a: 'b,
 {
     let config = ExponentTranchingData::from_generic_data(generic_data)?;
-    let market_state = account_deserialize::<ExponentTranchingMarket>(market)?;
+    let market = read_market(market_account)?;
     let accounts = extra_accounts
-        .take(5 + market_state.sy_cpi_accounts.get_sy_state.len())
+        .take(5 + market.get_sy_state.len())
         .collect::<Vec<_>>();
     let [return_model, address_lookup_table, sy_program, event_authority, program, sy_accounts @ ..] =
         accounts.as_slice()
@@ -60,12 +62,23 @@ where
         return Err(ScopeError::AccountsAndTokenMismatch);
     };
 
-    if program.key() != exponent_tranching_itf::ID {
+    if sy_accounts.len() != market.get_sy_state.len() {
+        return Err(ScopeError::AccountsAndTokenMismatch);
+    }
+
+    let expected_event_authority =
+        Pubkey::find_program_address(&[b"__event_authority"], &exponent_tranching_itf::ID).0;
+    if return_model.key() != market.return_model_storage
+        || address_lookup_table.key() != market.address_lookup_table
+        || sy_program.key() != market.sy_program
+        || event_authority.key() != expected_event_authority
+        || program.key() != exponent_tranching_itf::ID
+    {
         return Err(ScopeError::UnexpectedAccount);
     }
 
     let mut metas = exponent_tranching_itf::accounts::UpdateMarket {
-        market: market.key(),
+        market: market_account.key(),
         return_model_storage: return_model.key(),
         address_lookup_table: address_lookup_table.key(),
         sy_program: sy_program.key(),
@@ -73,15 +86,37 @@ where
         program: program.key(),
     }
     .to_account_metas(None);
-    metas.extend(sy_accounts.iter().map(|account| AccountMeta {
-        pubkey: account.key(),
-        is_signer: account.is_signer,
-        is_writable: account.is_writable,
-    }));
+
+    {
+        let lookup_table_data = address_lookup_table
+            .try_borrow_data()
+            .map_err(|_| ScopeError::UnableToDeserializeAccount)?;
+        let lookup_table = AddressLookupTable::deserialize(&lookup_table_data)
+            .map_err(|_| ScopeError::UnableToDeserializeAccount)?;
+
+        for (account, context) in sy_accounts.iter().zip(&market.get_sy_state) {
+            let expected_key = lookup_table
+                .addresses
+                .get(usize::from(context.alt_index))
+                .ok_or(ScopeError::UnableToDeserializeAccount)?;
+            if account.key() != *expected_key
+                || (context.is_signer && !account.is_signer)
+                || (context.is_writable && !account.is_writable)
+            {
+                return Err(ScopeError::UnexpectedAccount);
+            }
+
+            metas.push(AccountMeta {
+                pubkey: account.key(),
+                is_signer: context.is_signer,
+                is_writable: context.is_writable,
+            });
+        }
+    }
 
     let mut account_infos = Vec::with_capacity(accounts.len() + 2);
     account_infos.push(program.to_account_info());
-    account_infos.push(market.to_account_info());
+    account_infos.push(market_account.to_account_info());
     account_infos.extend(accounts.iter().map(|account| account.to_account_info()));
 
     invoke(
@@ -95,15 +130,15 @@ where
     .expect("update_market invoke returned Err; an Exponent revert aborts the transaction");
 
     let (return_program, return_bytes) =
-        get_return_data().ok_or(ScopeError::UnableToDeserializeAccount)?;
+        get_return_data().ok_or(ScopeError::ExponentTranchingCPIError)?;
     if return_program != exponent_tranching_itf::ID {
-        return Err(ScopeError::UnexpectedAccount);
+        return Err(ScopeError::ExponentTranchingCPIError);
     }
 
     let return_data = UpdateMarketReturnData::try_from_slice(&return_bytes)
-        .map_err(|_| ScopeError::UnableToDeserializeAccount)?;
-    if return_data.market != market.key() {
-        return Err(ScopeError::UnexpectedAccount);
+        .map_err(|_| ScopeError::ExponentTranchingCPIError)?;
+    if return_data.market != market_account.key() {
+        return Err(ScopeError::ExponentTranchingCPIError);
     }
 
     let (effective_nav, lp_price) = match config.tranche_side {
@@ -121,9 +156,8 @@ where
     Ok(DatedPrice {
         price,
         last_updated_slot: clock.slot,
-        // exponent returns an i64 timestamp, while scope stores timestamps as u64.
-        unix_timestamp: return_data
-            .timestamp
+        unix_timestamp: clock
+            .unix_timestamp
             .try_into()
             .map_err(|_| ScopeError::BadTimestamp)?,
         ..Default::default()
@@ -141,13 +175,20 @@ fn to_scope_price(effective_nav: ExponentNumber, lp_price: ExponentNumber) -> Sc
 }
 
 pub fn validate_mapping_cfg(mapping: Option<&AccountInfo>, generic_data: &[u8]) -> ScopeResult<()> {
-    let market = mapping.ok_or(ScopeError::MissingPriceAccount)?;
-    if market.owner != &exponent_tranching_itf::ID {
+    let market_account = mapping.ok_or(ScopeError::MissingPriceAccount)?;
+    if market_account.owner != &exponent_tranching_itf::ID {
         return Err(ScopeError::WrongAccountOwner);
     }
-    account_deserialize::<ExponentTranchingMarket>(market)?;
+    read_market(market_account)?;
     ExponentTranchingData::from_generic_data(generic_data)?;
     Ok(())
+}
+
+fn read_market(market_account: &AccountInfo) -> ScopeResult<MarketCpiConfig> {
+    let data = market_account
+        .try_borrow_data()
+        .map_err(|_| ScopeError::UnableToDeserializeAccount)?;
+    ExponentTranchingMarket::read_cpi_config(&data).ok_or(ScopeError::UnableToDeserializeAccount)
 }
 
 #[cfg(test)]

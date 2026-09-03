@@ -11,7 +11,8 @@ const MAX_REFRESH_CU: u64 = 250_000;
 fn records_mainnet_senior_nav_from_update_market_return_data() {
     let fixture = MainnetFixture::load();
     let recorded = fixture.run(TrancheSide::Senior, Scenario::Valid).unwrap();
-    assert_close(recorded.price, recorded.event.senior_lp_price);
+    assert!(recorded.return_data.senior_effective_nav > 0.0);
+    assert_close(recorded.price, recorded.return_data.senior_lp_price);
     assert_eq!(recorded.slot, fixture.slot());
     assert_eq!(recorded.unix_timestamp, fixture.unix_timestamp());
     assert!(recorded.compute_units <= MAX_REFRESH_CU);
@@ -21,7 +22,8 @@ fn records_mainnet_senior_nav_from_update_market_return_data() {
 fn records_mainnet_junior_nav_from_update_market_return_data() {
     let fixture = MainnetFixture::load();
     let recorded = fixture.run(TrancheSide::Junior, Scenario::Valid).unwrap();
-    assert_close(recorded.price, recorded.event.junior_lp_price);
+    assert!(recorded.return_data.junior_effective_nav > 0.0);
+    assert_close(recorded.price, recorded.return_data.junior_lp_price);
     assert!(recorded.compute_units <= MAX_REFRESH_CU);
 }
 
@@ -31,10 +33,10 @@ fn records_mainnet_auto_navs_from_update_market_return_data() {
     for side in [TrancheSide::Senior, TrancheSide::Junior] {
         let recorded = fixture.run(side, Scenario::Valid).unwrap();
         let expected = match side {
-            TrancheSide::Senior => recorded.event.senior_lp_price,
-            TrancheSide::Junior => recorded.event.junior_lp_price,
+            TrancheSide::Senior => recorded.return_data.senior_lp_price,
+            TrancheSide::Junior => recorded.return_data.junior_lp_price,
         };
-        assert!(recorded.event.sy_exchange_rate > 0.0);
+        assert!(recorded.return_data.sy_exchange_rate > 0.0);
         assert!(expected > 0.0);
         assert_close(recorded.price, expected);
         assert_eq!(recorded.slot, fixture.slot());
@@ -52,8 +54,8 @@ fn onyc_loss_reprices_the_junior_tranche() {
         .with_onyc_price_ratio(9, 10)
         .run(TrancheSide::Junior, Scenario::Valid)
         .unwrap();
-    assert_close(dropped.price, dropped.event.junior_lp_price);
-    assert!(dropped.event.sy_exchange_rate < baseline.event.sy_exchange_rate);
+    assert_close(dropped.price, dropped.return_data.junior_lp_price);
+    assert!(dropped.return_data.sy_exchange_rate < baseline.return_data.sy_exchange_rate);
     assert!(dropped.price < baseline.price);
 }
 
@@ -63,7 +65,7 @@ fn wiped_junior_nav_records_zero_instead_of_virtual_share_dust() {
         .with_onyc_price_ratio(1, 10)
         .run(TrancheSide::Junior, Scenario::Valid)
         .unwrap();
-    assert_eq!(recorded.event.junior_effective_nav, 0.0);
+    assert_eq!(recorded.return_data.junior_effective_nav, 0.0);
     assert_eq!(recorded.price, 0.0);
 }
 
@@ -72,7 +74,7 @@ fn extra_accounts_cannot_replace_the_market_bound_interface() {
     let recorded = MainnetFixture::load()
         .run(TrancheSide::Senior, Scenario::ExtraAccount)
         .unwrap();
-    assert_close(recorded.price, recorded.event.senior_lp_price);
+    assert_close(recorded.price, recorded.return_data.senior_lp_price);
 }
 
 #[test]
@@ -81,18 +83,21 @@ fn rejects_incomplete_or_substituted_interface_accounts() {
     for (scenario, instruction_error) in [
         (
             Scenario::MissingInterfaceAccount,
-            InstructionError::NotEnoughAccountKeys,
+            InstructionError::Custom(6006),
         ),
+        (Scenario::WrongSyMeta, InstructionError::Custom(6004)),
+        (Scenario::WrongReturnModel, InstructionError::Custom(6004)),
         (
-            Scenario::WrongSyMeta,
-            InstructionError::NotEnoughAccountKeys,
+            Scenario::WrongAddressLookupTable,
+            InstructionError::Custom(6004),
         ),
-        (Scenario::WrongReturnModel, InstructionError::Custom(2001)),
+        (Scenario::WrongSyProgram, InstructionError::Custom(6004)),
         (
             Scenario::WrongEventAuthority,
-            InstructionError::Custom(2006),
+            InstructionError::Custom(6004),
         ),
         (Scenario::WrongProgram, InstructionError::Custom(6004)),
+        (Scenario::ReadonlySyAccount, InstructionError::Custom(6004)),
         (
             Scenario::ReadonlyMarket,
             InstructionError::PrivilegeEscalation,

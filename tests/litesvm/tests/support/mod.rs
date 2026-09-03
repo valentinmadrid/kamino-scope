@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 mod rpc;
 
 use std::{collections::HashMap, fs, path::PathBuf, str::FromStr};
@@ -72,16 +70,19 @@ pub enum Scenario {
     MissingInterfaceAccount,
     WrongSyMeta,
     WrongReturnModel,
+    WrongAddressLookupTable,
+    WrongSyProgram,
     WrongEventAuthority,
     WrongProgram,
     ReadonlyMarket,
+    ReadonlySyAccount,
     ExtraAccount,
     LegacyPreInstruction,
     UnexpectedPreInstruction,
 }
 
 #[derive(Debug)]
-pub struct UpdateMarketEvent {
+pub struct UpdateMarketReturnData {
     pub sy_exchange_rate: f64,
     pub senior_effective_nav: f64,
     pub junior_effective_nav: f64,
@@ -95,8 +96,7 @@ pub struct RecordedPrice {
     pub slot: u64,
     pub unix_timestamp: u64,
     pub compute_units: u64,
-    pub event: UpdateMarketEvent,
-    pub logs: Vec<String>,
+    pub return_data: UpdateMarketReturnData,
 }
 
 pub struct MainnetFixture {
@@ -215,6 +215,12 @@ impl MainnetFixture {
             }
             Scenario::WrongSyMeta => exponent_accounts[6] = AccountMeta::new(dummy, false),
             Scenario::WrongReturnModel => exponent_accounts[1] = AccountMeta::new(dummy, false),
+            Scenario::WrongAddressLookupTable => {
+                exponent_accounts[2] = AccountMeta::new_readonly(dummy, false)
+            }
+            Scenario::WrongSyProgram => {
+                exponent_accounts[3] = AccountMeta::new_readonly(dummy, false)
+            }
             Scenario::WrongEventAuthority => {
                 exponent_accounts[4] = AccountMeta::new_readonly(dummy, false)
             }
@@ -224,6 +230,10 @@ impl MainnetFixture {
             }
             Scenario::ReadonlyMarket => {
                 exponent_accounts[0] = AccountMeta::new_readonly(self.market, false)
+            }
+            Scenario::ReadonlySyAccount => {
+                assert!(exponent_accounts[6].is_writable);
+                exponent_accounts[6].is_writable = false;
             }
             Scenario::ExtraAccount => {
                 exponent_accounts.push(AccountMeta::new_readonly(dummy, false))
@@ -261,8 +271,7 @@ impl MainnetFixture {
             slot: read_u64(&price_data, FIRST_PRICE_OFFSET + 16),
             unix_timestamp: read_u64(&price_data, FIRST_PRICE_OFFSET + 24),
             compute_units: metadata.compute_units_consumed,
-            event: update_event_from_logs(&metadata.logs),
-            logs: metadata.logs,
+            return_data: update_market_return_data(&metadata.logs),
         })
     }
 
@@ -361,7 +370,7 @@ pub fn verify_or_update_live_fixture(snapshot_name: &str, market: Pubkey) {
     }
 }
 
-fn update_event_from_logs(logs: &[String]) -> UpdateMarketEvent {
+fn update_market_return_data(logs: &[String]) -> UpdateMarketReturnData {
     let prefix = format!("Program return: {TRANCHING_PROGRAM_ID} ");
     let data = logs
         .iter()
@@ -374,7 +383,7 @@ fn update_event_from_logs(logs: &[String]) -> UpdateMarketEvent {
         })
         .expect("update_market return log");
     assert_eq!(data.len(), 424, "unexpected update_market return size");
-    UpdateMarketEvent {
+    UpdateMarketReturnData {
         sy_exchange_rate: number_as_f64(&data, 32),
         senior_effective_nav: number_as_f64(&data, 128),
         junior_effective_nav: number_as_f64(&data, 160),

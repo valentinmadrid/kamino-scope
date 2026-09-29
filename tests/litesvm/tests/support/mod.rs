@@ -1,3 +1,5 @@
+#[allow(dead_code)]
+pub mod pt;
 mod rpc;
 
 use std::{collections::HashMap, fs, path::PathBuf, str::FromStr};
@@ -29,15 +31,11 @@ pub const AUTO_MARKET: Pubkey =
 
 const EVENT_AUTHORITY: Pubkey =
     solana_pubkey::pubkey!("3mBi7DRWMdTdDghA1cVLrwDKAgDo7UTDWoeik4GkXCsf");
-const ONYC_SY_META: Pubkey = solana_pubkey::pubkey!("BmLiVHRb9ppTrEA5jhTgNJ2WFtjUZEkfzJZGswEidxzu");
-const ONYC_SCOPE_PRICES: Pubkey =
-    solana_pubkey::pubkey!("3t4JZcueEzTbVP6kLxXrL3VpWx45jDer4eqysweBchNH");
 
 const MARKET_ALT_OFFSET: usize = 8;
 const MARKET_SY_PROGRAM_OFFSET: usize = 72;
 const MARKET_RETURN_MODEL_OFFSET: usize = 232;
 const MARKET_ROLES_OFFSET: usize = 1281;
-const SY_META_SCOPE_PRICE_CHAIN_OFFSET: usize = 162;
 const LOOKUP_TABLE_ADDRESSES_OFFSET: usize = 56;
 const CPI_CONTEXT_SIZE: usize = 3;
 const NUMBER_DENOMINATOR: f64 = 1_000_000_000_000.0;
@@ -150,19 +148,8 @@ impl MainnetFixture {
     }
 
     pub fn with_onyc_price_ratio(mut self, numerator: u64, denominator: u64) -> Self {
-        assert!(denominator != 0);
-        let index = usize::from(read_u16(
-            self.account_data(ONYC_SY_META),
-            SY_META_SCOPE_PRICE_CHAIN_OFFSET,
-        ));
-        let price_offset = FIRST_PRICE_OFFSET + index * DATED_PRICE_SIZE;
-        let current = u128::from(read_u64(self.account_data(ONYC_SCOPE_PRICES), price_offset));
-        let adjusted = current * u128::from(numerator) / u128::from(denominator);
-        write_u64(
-            self.account_data_mut(ONYC_SCOPE_PRICES),
-            price_offset,
-            adjusted.try_into().expect("adjusted ONyc price fits u64"),
-        );
+        let accounts = self.exponent_accounts();
+        pt::set_rate_ratio(&mut self, &accounts[6..], numerator, denominator);
         self
     }
 

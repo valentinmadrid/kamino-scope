@@ -1263,10 +1263,27 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5443807d6dff69373d433ab9ef5378ad8df50ca6298caf15de6e52e24aaf54d5"
 
 [[package]]
+name = "exponent-core-itf"
+version = "0.1.0"
+dependencies = [
+ "anchor-lang",
+ "decimal-wad",
+]
+
+[[package]]
+name = "exponent-generic-standard-itf"
+version = "0.1.0"
+dependencies = [
+ "anchor-lang",
+ "exponent-core-itf",
+]
+
+[[package]]
 name = "exponent-tranching-itf"
 version = "0.1.0"
 dependencies = [
  "anchor-lang",
+ "exponent-core-itf",
 ]
 
 [[package]]
@@ -3114,6 +3131,8 @@ dependencies = [
  "cfg-if",
  "chainlink-data-streams-report",
  "decimal-wad",
+ "exponent-core-itf",
+ "exponent-generic-standard-itf",
  "exponent-tranching-itf",
  "flashtrade-perp-itf",
  "intbits",

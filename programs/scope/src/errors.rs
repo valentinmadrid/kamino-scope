@@ -240,6 +240,9 @@ pub enum ScopeError {
 
     #[msg("Exponent tranching CPI response failed validation")]
     ExponentTranchingCPIError,
+
+    #[msg("Exponent PT CPI response failed validation")]
+    ExponentPtCPIError,
 }
 
 impl<T> From<TryFromPrimitiveError<T>> for ScopeError

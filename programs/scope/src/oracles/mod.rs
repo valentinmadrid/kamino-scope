@@ -9,6 +9,7 @@ pub mod capped_most_recent_of;
 pub mod chainlink;
 pub mod conditional;
 pub mod discount_to_maturity;
+pub mod exponent_pt;
 pub mod exponent_tranching;
 pub mod fixed_price;
 pub mod flashtrade_lp;
@@ -116,6 +117,7 @@ impl OracleType {
             OracleType::Conditional => 20_000,
             OracleType::KlendCTokenExchangeRate => 200_000,
             OracleType::ExponentTranching => 250_000,
+            OracleType::ExponentPt => 200_000,
         }
     }
 }
@@ -321,6 +323,12 @@ where
             extra_accounts,
         )
         .map_err(Into::into),
+        OracleType::ExponentPt => exponent_pt::get_price(
+            base_account,
+            &oracle_mappings.generic[index],
+            clock,
+            extra_accounts,
+        ),
     }?;
     // The price providers above are performing their type-specific validations, but are still free to return 0,
     // which we can only tolerate for certain oracle types (e.g. explicit fixed price, multiplication chains
@@ -445,6 +453,10 @@ pub fn validate_oracle_cfg(
             exponent_tranching::validate_mapping_cfg(price_account, generic_data)
                 .map_err(Into::into)
         }
+        OracleType::ExponentPt => {
+            exponent_pt::validate_mapping_cfg(price_account, generic_data, clock)
+                .map_err(Into::into)
+        }
     }
 }
 
@@ -481,7 +493,7 @@ pub fn update_generic_data_must_reset_price(price_type: OracleType) -> bool {
         | OracleType::TotalMintSupply
         | OracleType::KlendCTokenExchangeRate => false,
 
-        OracleType::ExponentTranching => true,
+        OracleType::ExponentTranching | OracleType::ExponentPt => true,
 
         OracleType::FixedPrice
         | OracleType::DiscountToMaturity
@@ -556,6 +568,13 @@ pub fn debug_format_generic_data(
             d.field(
                 "exponent_tranching_cfg",
                 &exponent_tranching::ExponentTranchingData::from_generic_data(generic_data).ok(),
+            );
+        }
+
+        OracleType::ExponentPt => {
+            d.field(
+                "exponent_pt_cfg",
+                &exponent_pt::ExponentPtData::from_generic_data(generic_data).ok(),
             );
         }
 

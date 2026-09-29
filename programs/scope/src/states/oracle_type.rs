@@ -157,6 +157,8 @@ pub enum OracleType {
     KlendCTokenExchangeRate = 49,
     /// Exponent tranching LP token net asset value via CPI
     ExponentTranching = 50,
+    /// Exponent PT redemption value with a linear discount until maturity
+    ExponentPt = 51,
 }
 
 impl OracleType {
@@ -171,6 +173,7 @@ impl OracleType {
                 | OracleType::TotalMintSupply
                 | OracleType::Conditional
                 | OracleType::ExponentTranching
+                | OracleType::ExponentPt
         )
     }
 
@@ -252,6 +255,7 @@ impl OracleType {
             | OracleType::PythLazerEMA
             | OracleType::KlendCTokenExchangeRate => false,
             OracleType::ExponentTranching => false,
+            OracleType::ExponentPt => false,
         }
     }
 }

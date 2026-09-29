@@ -16,3 +16,4 @@ debug = []
 
 [dependencies]
 anchor-lang = "0.28.0"
+exponent-core-itf = { path = "../exponent-core-itf", features = ["no-entrypoint"] }
